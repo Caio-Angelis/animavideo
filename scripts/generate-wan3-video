@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Direct Wan 3.0 text-to-video call. The API key is read at runtime and is
+# never written to the repository or included in curl's argument list.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+KEY_FILE="${TOKEN_PLAN_KEY_FILE:-$PROJECT_DIR/password.txt}"
+# Token Plan keys use the Token Plan gateway. Set WAN3_BASE_URL only when the
+# key belongs to a different regional endpoint.
+BASE_URL="${WAN3_BASE_URL:-https://token-plan.ap-southeast-1.maas.aliyuncs.com}"
+MODEL="${WAN3_MODEL:-wan3.0-video-prime}"
+RESOLUTION="${WAN3_RESOLUTION:-480P}"
+RATIO="${WAN3_RATIO:-adaptive}"
+DURATION="${WAN3_DURATION:-5}"
+POLL_INTERVAL="${WAN3_POLL_INTERVAL:-15}"
+MAX_POLLS="${WAN3_MAX_POLLS:-40}"
+OUTPUT_FILE="${WAN3_OUTPUT:-$PROJECT_DIR/output/video.mp4}"
+PROMPT="${WAN3_PROMPT:-A kitten running across a rooftop under the moonlight, city neon lights flickering in the distance, cinematic quality, smooth camera movement.}"
+
+die() {
+  printf 'Erro: %s\n' "$*" >&2
+  exit 1
+}
+
+command -v curl >/dev/null 2>&1 || die "curl não está instalado."
+command -v jq >/dev/null 2>&1 || die "jq não está instalado."
+[ -r "$KEY_FILE" ] || die "arquivo da chave não encontrado ou não legível: $KEY_FILE"
+[ -s "$KEY_FILE" ] || die "arquivo da chave está vazio: $KEY_FILE"
+
+line_count="$(awk 'END { print NR }' "$KEY_FILE")"
+[ "$line_count" = "1" ] || die "o arquivo da chave deve conter exatamente uma linha."
+
+# Strip only the line ending; do not print this value.
+API_KEY="$(sed 's/\r$//' "$KEY_FILE")"
+case "$API_KEY" in
+  sk-sp-*) ;;
+  *) die "a chave de password.txt não parece ser uma chave Token Plan (sk-sp-...)." ;;
+esac
+
+case "$DURATION" in
+  ''|*[!0-9]*) die "WAN3_DURATION deve ser um número inteiro." ;;
+esac
+case "$POLL_INTERVAL" in
+  ''|*[!0-9]*) die "WAN3_POLL_INTERVAL deve ser um número inteiro." ;;
+esac
+case "$MAX_POLLS" in
+  ''|*[!0-9]*) die "WAN3_MAX_POLLS deve ser um número inteiro." ;;
+esac
+
+BASE_URL="${BASE_URL%/}"
+CREATE_URL="$BASE_URL/api/v1/services/aigc/video-generation/video-synthesis"
+
+# Read the Authorization header through curl's config stdin so the secret is
+# not exposed as a command-line argument. The key remains only in this shell.
+authorized_curl() {
+  local url="$1"
+  shift
+  printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" |
+    curl --config - --location --fail-with-body --silent --show-error "$@" "$url"
+}
+
+PAYLOAD="$(jq -n \
+  --arg model "$MODEL" \
+  --arg prompt "$PROMPT" \
+  --arg resolution "$RESOLUTION" \
+  --arg ratio "$RATIO" \
+  --argjson duration "$DURATION" \
+  '{model: $model, input: {prompt: $prompt}, parameters: {resolution: $resolution, ratio: $ratio, duration: $duration}}')"
+
+printf 'Enviando tarefa %s (%ss, %s, %s)...\n' "$MODEL" "$DURATION" "$RESOLUTION" "$RATIO"
+
+CREATE_RESPONSE=""
+if ! CREATE_RESPONSE="$(authorized_curl "$CREATE_URL" \
+  --request POST \
+  --header 'X-DashScope-Async: enable' \
+  --header 'Content-Type: application/json' \
+  --data-raw "$PAYLOAD")"; then
+  message="$(jq -r '.message // .code // empty' <<<"$CREATE_RESPONSE" 2>/dev/null || true)"
+  if [[ "$message" == *"Model not exist"* ]]; then
+    die "o Token Plan autenticou, mas $MODEL não está disponível neste gateway. Use uma chave Model Studio comum (sk-/sk-ws-) para esse modelo ou escolha um modelo liberado no Token Plan, como happyhorse-1.1-t2v."
+  fi
+  [ -n "$message" ] && die "a API recusou a criação da tarefa: $message"
+  die "não foi possível criar a tarefa na API de vídeo."
+fi
+
+TASK_ID="$(jq -r '.output.task_id // .task_id // empty' <<<"$CREATE_RESPONSE")"
+[ -n "$TASK_ID" ] || {
+  message="$(jq -r '.message // .code // empty' <<<"$CREATE_RESPONSE" 2>/dev/null || true)"
+  [ -n "$message" ] && die "resposta sem task_id: $message"
+  die "resposta da API não contém task_id."
+}
+
+printf 'Tarefa criada: %s\n' "$TASK_ID"
+TASK_URL="$BASE_URL/api/v1/tasks/$TASK_ID"
+STATUS_RESPONSE=""
+STATUS=""
+VIDEO_URL=""
+
+for ((poll=1; poll<=MAX_POLLS; poll++)); do
+  if ! STATUS_RESPONSE="$(authorized_curl "$TASK_URL" --request GET)"; then
+    if [ "$poll" -eq "$MAX_POLLS" ]; then
+      die "não foi possível consultar a tarefa após $MAX_POLLS tentativas."
+    fi
+    printf 'Consulta %d/%d falhou; tentando novamente em %ss.\n' "$poll" "$MAX_POLLS" "$POLL_INTERVAL" >&2
+    sleep "$POLL_INTERVAL"
+    continue
+  fi
+
+  STATUS="$(jq -r '.output.task_status // .task_status // empty' <<<"$STATUS_RESPONSE")"
+  case "$STATUS" in
+    SUCCEEDED)
+      VIDEO_URL="$(jq -r '.output.video_url // .video_url // empty' <<<"$STATUS_RESPONSE")"
+      [ -n "$VIDEO_URL" ] || die "a tarefa terminou, mas a API não retornou video_url."
+      printf 'Tarefa concluída. Baixando o MP4...\n'
+      break
+      ;;
+    FAILED|CANCELED|UNKNOWN)
+      message="$(jq -r '.output.message // .message // .code // empty' <<<"$STATUS_RESPONSE" 2>/dev/null || true)"
+      [ -n "$message" ] && die "tarefa $STATUS: $message"
+      die "tarefa $STATUS."
+      ;;
+    PENDING|RUNNING|'')
+      printf 'Status %s (%d/%d); próxima consulta em %ss.\n' "${STATUS:-PENDING}" "$poll" "$MAX_POLLS" "$POLL_INTERVAL"
+      ;;
+    *)
+      printf 'Status %s (%d/%d); próxima consulta em %ss.\n' "$STATUS" "$poll" "$MAX_POLLS" "$POLL_INTERVAL"
+      ;;
+  esac
+
+  [ "$poll" -lt "$MAX_POLLS" ] || die "a tarefa não terminou após $((MAX_POLLS * POLL_INTERVAL))s."
+  sleep "$POLL_INTERVAL"
+done
+
+mkdir -p -- "$(dirname -- "$OUTPUT_FILE")"
+PART_FILE="${OUTPUT_FILE}.part"
+trap 'rm -f -- "$PART_FILE"' EXIT
+curl --location --fail --silent --show-error "$VIDEO_URL" --output "$PART_FILE"
+mv -f -- "$PART_FILE" "$OUTPUT_FILE"
+trap - EXIT
+
+printf 'Vídeo salvo em: %s\n' "$OUTPUT_FILE"

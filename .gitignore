@@ -1,0 +1,53 @@
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Segredos e configurações locais
+.env
+.env.*
+!.env.example
+password.txt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Dependências e caches
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.hyperframes/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Saídas geradas pelo pipeline e pela WebUI.
+# Os arquivos podem ser recriados e não devem deixar o repositório gigante.
+output/
+outputs/
+production/jobs/
+production/inbox/*
+!production/inbox/.gitkeep
+Inicios/
+Finais/
+resultados0209/
+*.part
+*.part.*
+*.log
+
+# A composição é recriada a cada produção a partir do job mais recente.
+index.html
+
+# Contexto local do agente (não é necessário para executar o projeto).
+@ai.context.md
+.codex/

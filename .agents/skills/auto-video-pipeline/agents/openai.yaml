@@ -1,0 +1,4 @@
+interface:
+  display_name: "Auto Video Pipeline"
+  short_description: "Roteiro para MP4 narrado e legendado"
+  default_prompt: "Transforme este roteiro em um vídeo de aproximadamente um minuto e entregue o MP4 final."

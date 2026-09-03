@@ -1,0 +1,18 @@
+{
+  "target_duration_s": 60,
+  "ratio": "9:16",
+  "resolution": "480P",
+  "bl_config": "token-plan",
+  "image_model": "wan2.7-image",
+  "video_model": "happyhorse-1.1-r2v",
+  "preferred_clip_duration_s": 15,
+  "watermark": false,
+  "remote_workers": 2,
+  "poll_interval_s": 15,
+  "qwen_model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "qwen_language": "Portuguese",
+  "qwen_reference": "assets/voice/ptbr-reference.wav",
+  "qwen_x_vector_only": true,
+  "caption_words_per_line": 8,
+  "try_hyperframes": true
+}

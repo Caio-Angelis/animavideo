@@ -1,0 +1,13 @@
+{
+  "name": "animavideo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "./scripts/hyperframes preview",
+    "check": "./scripts/hyperframes check",
+    "render": "./scripts/hyperframes render",
+    "publish": "./scripts/hyperframes publish",
+    "produce": "./scripts/produce-video",
+    "webui": "node webui/server.mjs"
+  }
+}
